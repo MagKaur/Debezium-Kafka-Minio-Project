@@ -6,8 +6,7 @@ services:
       - ./config/.env
     ports:
       - "5432:5432"
-    volumes:
-      - ./pgdata:/var/lib/postgresql/data
+
     command:
       - "postgres"
       - "-c"
@@ -16,6 +15,9 @@ services:
       - "max_replication_slots=10"
       - "-c"
       - "max_wal_senders=10"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
 
   kafka:
     image: apache/kafka:3.7.0
@@ -44,7 +46,8 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
 
     volumes:
-      - ./kafkadata:/var/lib/kafka/data
+      - kafka-data:/tmp/kraft-combined-logs
+
 
   connect:
     image: quay.io/debezium/connect:2.7
@@ -65,3 +68,47 @@ services:
       VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
       KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    container_name: schema-registry
+    depends_on:
+      - kafka
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://kafka:29092"
+
+  spark:
+    build:
+      context: .
+      dockerfile: src/spark/Dockerfile
+    container_name: spark
+    depends_on:
+      - kafka
+    volumes:
+      - ./spark:/opt/spark-app
+      - spark-ivy:/tmp/.ivy2
+    command: >
+      /opt/spark/bin/spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.commons:commons-pool2:2.11.1,org.apache.kafka:kafka-clients:3.4.1
+      --conf spark.jars.ivy=/tmp/.ivy2
+      --conf spark.driver.extraClassPath=/tmp/.ivy2/jars/*
+      --conf spark.executor.extraClassPath=/tmp/.ivy2/jars/*
+      /opt/spark-app/job_orders_stream.py
+
+   #dodanie connectorów
+  connect-init:
+    image: mcr.microsoft.com/powershell:7.4-alpine-3.17
+    depends_on:
+      - connect
+    volumes:
+       - ./connectors:/connectors:ro
+    entrypoint: [ "pwsh","-File","/connectors/register.ps1" ]
+    restart: "no"
+
+volumes:
+  kafka-data:
+  spark-ivy:

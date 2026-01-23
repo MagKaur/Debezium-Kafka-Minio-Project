@@ -1,0 +1,4 @@
+{
+  "schemaType": "JSON",
+  "schema": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"title\": \"Debezium Orders Event\",\n  \"type\": \"object\",\n  \"required\": [\"payload\"],\n  \"properties\": {\n    \"payload\": {\n      \"type\": \"object\",\n      \"required\": [\"op\", \"source\"],\n      \"properties\": {\n        \"op\": { \"type\": \"string\", \"enum\": [\"c\", \"u\", \"d\", \"r\"] },\n        \"before\": { \"type\": [\"object\", \"null\"] },\n        \"after\": { \"type\": [\"object\", \"null\"] },\n        \"source\": {\n          \"type\": \"object\",\n          \"required\": [\"db\", \"schema\", \"table\"],\n          \"properties\": {\n            \"db\": { \"type\": \"string\" },\n            \"schema\": { \"type\": \"string\" },\n            \"table\": { \"type\": \"string\" }\n          }\n        }\n      }\n    }\n  }\n}"
+}
