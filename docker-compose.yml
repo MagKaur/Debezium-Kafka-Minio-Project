@@ -44,9 +44,13 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
-
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
     volumes:
-      - kafka-data:/tmp/kraft-combined-logs
+      - ./kafkadata:/var/lib/kafka/data
 
 
   connect:
@@ -63,11 +67,21 @@ services:
       GROUP_ID: "connect-cluster"
       CONFIG_STORAGE_TOPIC: "connect-configs"
       OFFSET_STORAGE_TOPIC: "connect-offsets"
-      STATUS_STORAGE_TOPIC: "connect-status"
+      STATUS_STORAGE_TOPIC: "connect-statuses"
+
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+
       KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
       VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
       KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8083/ >/dev/null || exit 1" ]
+      interval: 5s
+      timeout: 2s
+      retries: 60
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.1
@@ -80,34 +94,60 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://kafka:29092"
-
-  spark:
-    build:
-      context: .
-      dockerfile: src/spark/Dockerfile
-    container_name: spark
-    depends_on:
-      - kafka
-    volumes:
-      - ./spark:/opt/spark-app
-      - spark-ivy:/tmp/.ivy2
-    command: >
-      /opt/spark/bin/spark-submit
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.commons:commons-pool2:2.11.1,org.apache.kafka:kafka-clients:3.4.1
-      --conf spark.jars.ivy=/tmp/.ivy2
-      --conf spark.driver.extraClassPath=/tmp/.ivy2/jars/*
-      --conf spark.executor.extraClassPath=/tmp/.ivy2/jars/*
-      /opt/spark-app/job_orders_stream.py
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: "1"
 
    #dodanie connectorów
   connect-init:
     image: mcr.microsoft.com/powershell:7.4-alpine-3.17
     depends_on:
-      - connect
+      wait-ready:
+        condition: service_completed_successfully
     volumes:
        - ./connectors:/connectors:ro
     entrypoint: [ "pwsh","-File","/connectors/register.ps1" ]
     restart: "no"
+
+  wait-ready:
+    image: curlimages/curl:8.6.0
+    depends_on:
+      - kafka
+      - connect
+    entrypoint: [ "sh", "-lc" ]
+    command: >
+      echo "Waiting for Kafka DNS..." ;
+      until (getent hosts kafka >/dev/null 2>&1); do sleep 1; done ;
+      echo "Waiting for Connect..." ;
+      until curl -sf http://connect:8083/ >/dev/null; do sleep 2; done ;
+      echo "READY"
+    restart: "no"
+
+  spark:
+    image: apache/spark:3.5.1
+    container_name: spark
+    depends_on:
+      - kafka
+    volumes:
+      - ./src/spark:/opt/spark-app
+      - spark-ivy:/tmp/.ivy2
+    working_dir: /opt/spark-app
+    entrypoint: [ "sleep", "infinity" ]
+
+  spark-job:
+    image: apache/spark:3.5.1
+    container_name: spark-job
+    user: "0:0"
+    depends_on:
+      wait-ready:
+        condition: service_completed_successfully
+    volumes:
+      - ./src/spark:/opt/spark-app
+      - spark-ivy:/tmp/.ivy2
+      - ./spark/checkpoints:/opt/spark-app/checkpoints
+    working_dir: /opt/spark-app
+    entrypoint: [ "sh", "-lc" ]
+    command:
+      - "/opt/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.commons:commons-pool2:2.11.1,org.apache.kafka:kafka-clients:3.4.1 --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.driver.extraClassPath=/tmp/.ivy2/jars/* --conf spark.executor.extraClassPath=/tmp/.ivy2/jars/* /opt/spark-app/job_orders_stream.py"
+    restart: unless-stopped
 
 volumes:
   kafka-data:

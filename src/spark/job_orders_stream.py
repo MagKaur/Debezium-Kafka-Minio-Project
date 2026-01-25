@@ -58,6 +58,7 @@ query = (
     .outputMode("complete")
     .format("console")
     .option("truncate", "false")
+    .option("checkpointLocation", "/opt/spark-app/checkpoints/orders_stream")
     .start()
 )
 
