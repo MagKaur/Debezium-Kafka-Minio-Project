@@ -33,6 +33,17 @@ Spark
 
 MinIO
 
+-----------------Dostęp przez MinIO UI (opcjonalnie)
+
+URL: http://localhost:9001
+
+login: minioadmin
+
+hasło: minioadmin
+
+Bucket: datalake
+Zawiera pliki Delta
+
 
 ------Test------------
 
