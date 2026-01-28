@@ -139,6 +139,8 @@ services:
     depends_on:
       wait-ready:
         condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
     volumes:
       - ./src/spark:/opt/spark-app
       - spark-ivy:/tmp/.ivy2
@@ -146,9 +148,70 @@ services:
     working_dir: /opt/spark-app
     entrypoint: [ "sh", "-lc" ]
     command:
-      - "/opt/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.commons:commons-pool2:2.11.1,org.apache.kafka:kafka-clients:3.4.1 --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.driver.extraClassPath=/tmp/.ivy2/jars/* --conf spark.executor.extraClassPath=/tmp/.ivy2/jars/* /opt/spark-app/job_orders_stream.py"
+      - "/opt/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.commons:commons-pool2:2.11.1,org.apache.kafka:kafka-clients:3.4.1,io.delta:delta-spark_2.12:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.driver.extraClassPath=/tmp/.ivy2/jars/* --conf spark.executor.extraClassPath=/tmp/.ivy2/jars/* --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minioadmin --conf spark.hadoop.fs.s3a.secret.key=minioadmin --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false /opt/spark-app/job_orders_stream.py"
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # UI
+    volumes:
+      - minio_data:/data
+    networks:
+      - default
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb -p local/datalake || true;
+      mc ls local;
+      "
+    networks:
+      - default
+
+  spark-shell:
+    image: apache/spark:3.5.1
+    container_name: spark-shell
+    user: "0:0"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      wait-ready:
+        condition: service_completed_successfully
+    volumes:
+      - spark-ivy:/tmp/.ivy2
+    entrypoint: [ "sh", "-lc" ]
+    environment:
+      SPARK_SHELL_OPTS: >
+        --packages io.delta:delta-spark_2.12:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262
+        --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension
+        --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+        --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000
+        --conf spark.hadoop.fs.s3a.access.key=minioadmin
+        --conf spark.hadoop.fs.s3a.secret.key=minioadmin
+        --conf spark.hadoop.fs.s3a.path.style.access=true
+        --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+        --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false
+    command: >
+      bash -lc '/opt/spark/bin/spark-shell $SPARK_SHELL_OPTS'
+    stdin_open: true
+    tty: true
     restart: unless-stopped
 
 volumes:
   kafka-data:
   spark-ivy:
+  spark-jars:
+  minio_data:

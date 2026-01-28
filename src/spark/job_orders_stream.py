@@ -21,7 +21,7 @@ schema_root = StructType([
 ])
 
 spark = SparkSession.builder.appName("orders_stream").getOrCreate()
-spark.sparkContext.setLogLevel("WARN")
+spark.sparkContext.setLogLevel("ERROR")
 
 raw = (
     spark.readStream.format("kafka")
@@ -52,13 +52,13 @@ events = (
 )
 
 agg = events.groupBy("order_status").count()
-
+DELTA_PATH = "s3a://datalake/delta/orders_status_counts"
 query = (
     agg.writeStream
     .outputMode("complete")
-    .format("console")
-    .option("truncate", "false")
+    .format("delta")
     .option("checkpointLocation", "/opt/spark-app/checkpoints/orders_stream")
+    .option("path", DELTA_PATH)
     .start()
 )
 
